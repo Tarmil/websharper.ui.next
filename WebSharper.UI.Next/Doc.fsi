@@ -20,8 +20,6 @@
 
 namespace WebSharper.UI.Next
 
-type Pagelet = WebSharper.Html.Client.Pagelet
-
 /// Represents a time-varying node or a node list.
 [<Sealed>]
 type Doc =
@@ -87,7 +85,7 @@ type Doc with
     static member RunById : id: string -> Doc -> unit
 
     /// Creates a Pagelet from a Doc, in a Div container.
-    static member AsPagelet : Doc -> Pagelet
+    static member AsPagelet : Doc -> WebSharper.Html.Client.Pagelet
 
   // Special cases
 

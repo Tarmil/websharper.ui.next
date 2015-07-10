@@ -20,8 +20,74 @@
 
 namespace WebSharper.UI.Next
 
+open WebSharper.JavaScript
+
+type Doc =
+    | EmptyDoc
+    | ElemDoc of tag: string * attrs: seq<Attr> * children: seq<Doc>
+    | AppendDoc of Doc[]
+    | TextDoc of string
+
+    interface WebSharper.Html.Client.IControlBody with
+        member this.ReplaceInDom (node: Dom.Node) = X<unit>
+
+    static member Element (tagname: string) (attrs: seq<Attr>) (children: seq<Doc>) =
+        ElemDoc (tagname, attrs, children)
+
+    static member SvgElement (tagname: string) (attrs: seq<Attr>) (children: seq<Doc>) =
+        ElemDoc (tagname, attrs, children)
+
+    static member EmbedView (view: View<Doc>) = X<Doc>
+
+    static member Static (e: Dom.Element) = X<Doc>
+
+    static member TextView (view: View<string>) = X<Doc>
+
+    static member Empty = EmptyDoc
+
+    static member Append d1 d2 = AppendDoc [| d1; d2 |]
+
+    static member Concat docs = AppendDoc (Array.ofSeq docs)
+
+    static member Convert<'T when 'T : equality> (f: 'T -> Doc) (v: View<seq<'T>>) = X<Doc>
+
+    static member ConvertBy<'T, 'K when 'K : equality> (k: 'T -> 'K) (f: 'T -> Doc) (v: View<seq<'T>>) = X<Doc>
+
+    static member ConvertSeq<'T when 'T : equality> (f: View<'T> -> Doc) (v: View<seq<'T>>) = X<Doc>
+
+    static member ConvertSeqBy<'T, 'K when 'K : equality> (k: 'T -> 'K) (f: View<'T> -> Doc) (v: View<seq<'T>>) = X<Doc>
+
+    static member Run (e: Dom.Element) (doc: Doc) = X<unit>
+
+    static member RunById (id: string) (doc: Doc) = X<unit>
+
+    static member AsPagelet (d: Doc) = X<WebSharper.Html.Client.Pagelet>
+
+    static member TextNode t = TextDoc t
+
+    static member Input (attrs: seq<Attr>) (v: Var<string>) = X<Doc>
+
+    static member InputArea (attrs: seq<Attr>) (v: Var<string>) = X<Doc>
+
+    static member PasswordBox (attrs: seq<Attr>) (v: Var<string>) = X<Doc>
+
+    static member Button (caption: string) (attrs: seq<Attr>) (f: unit -> unit) = X<Doc>
+
+    static member Link (caption: string) (attrs: seq<Attr>) (f: unit -> unit) = X<Doc>
+
+    static member CheckBox (attrs: seq<Attr>) (v: Var<bool>) = X<Doc>
+
+    static member CheckBoxGroup<'T when 'T : equality> (attrs: seq<Attr>) (x: 'T) (v: Var<list<'T>>) = X<Doc>
+
+    static member Select<'T when 'T : equality> (attrs: seq<Attr>) (f: 'T -> string) (l: list<'T>) (v: Var<'T>) = X<Doc>
+
+    static member Radio<'T when 'T : equality> (attrs: seq<Attr>) (x: 'T) (v: Var<'T>) = X<Doc>
+
+namespace WebSharper.UI.Next.Proxies
+
 open WebSharper
 open WebSharper.JavaScript
+open WebSharper.UI.Next
 
 module DU = DomUtility
 type Pagelet = WebSharper.Html.Client.Pagelet
@@ -366,8 +432,8 @@ type UINextPagelet (doc) =
     override pg.Render () =
         Doc.RunById divId doc
 
-and [<JavaScript>]
-    Doc =
+and [<JavaScript; Proxy(typeof<Doc>)>]
+    DocProxy =
     {
         DocNode : DocNode
         Updates : View<unit>
@@ -382,51 +448,51 @@ and [<JavaScript>]
             let parent = elt.ParentNode
             parent.ReplaceChild(rdelim, elt) |> ignore
             parent.InsertBefore(ldelim, rdelim) |> ignore
-            Doc.RunBetween ldelim rdelim this
+            DocProxy.RunBetween ldelim rdelim this
 
     /// Creates a Doc.
     [<MethodImpl(MethodImplOptions.NoInlining)>]
     static member Mk node updates =
-        {
+        As<Doc> {
             DocNode = node
             Updates = updates
         }
 
-    static member Append a b =
-        (a.Updates, b.Updates)
+    static member Append (a: Doc) (b: Doc) =
+        ((As<DocProxy> a).Updates, (As<DocProxy> b).Updates)
         ||> View.Map2 (fun () () -> ())
-        |> Doc.Mk (AppendDoc (a.DocNode, b.DocNode))
+        |> DocProxy.Mk (AppendDoc ((As<DocProxy> a).DocNode, (As<DocProxy> b).DocNode))
 
     static member Concat xs =
         Seq.toArray xs
         |> Array.MapReduce (fun x -> x) Doc.Empty Doc.Append
 
-    static member Elem name attr children =
-        let node = Docs.CreateElemNode name attr children.DocNode
-        View.Map2 (fun () () -> ()) (Attrs.Updates node.Attr) children.Updates
-        |> Doc.Mk (ElemDoc node)
+    static member Elem name attr (children: Doc) =
+        let node = Docs.CreateElemNode name attr (As<DocProxy> children).DocNode
+        View.Map2 (fun () () -> ()) (Attrs.Updates node.Attr) (As<DocProxy> children).Updates
+        |> DocProxy.Mk (ElemDoc node)
 
     static member Element name attr children =
         let attr = Attr.Concat attr
         let children = Doc.Concat children
-        Doc.Elem (DU.CreateElement name) attr children
+        DocProxy.Elem (DU.CreateElement name) attr children
 
     static member SvgElement name attr children =
         let attr = Attr.Concat attr
         let children = Doc.Concat children
-        Doc.Elem (DU.CreateSvgElement name) attr children
+        DocProxy.Elem (DU.CreateSvgElement name) attr children
 
     static member Static el =
-        Doc.Elem el Attr.Empty Doc.Empty
+        DocProxy.Elem el Attr.Empty Doc.Empty
 
-    static member EmbedView view =
+    static member EmbedView (view: View<Doc>) =
         let node = Docs.CreateEmbedNode ()
         view
         |> View.Bind (fun doc ->
-            Docs.UpdateEmbedNode node doc.DocNode
-            doc.Updates)
+            Docs.UpdateEmbedNode node (As<DocProxy> doc).DocNode
+            (As<DocProxy> doc).Updates)
         |> View.Map ignore
-        |> Doc.Mk (EmbedDoc node)
+        |> DocProxy.Mk (EmbedDoc node)
 
     static member TextNode v =
         Doc.TextView (View.Const v)
@@ -435,14 +501,14 @@ and [<JavaScript>]
         let node = Docs.CreateTextNode ()
         txt
         |> View.Map (Docs.UpdateTextNode node)
-        |> Doc.Mk (TextDoc node)
+        |> DocProxy.Mk (TextDoc node)
 
-    static member Run parent doc =
-        let d = doc.DocNode
+    static member Run parent (doc: Doc) =
+        let d = (As<DocProxy> doc).DocNode
         Docs.LinkElement parent d
         let st = Docs.CreateRunState parent d
         let p = Mailbox.StartProcessor (fun () -> Docs.PerformAnimatedUpdate st d)
-        View.Sink p doc.Updates
+        View.Sink p (As<DocProxy> doc).Updates
 
     static member RunBetween ldelim rdelim doc =
         let d = doc.DocNode
@@ -460,7 +526,7 @@ and [<JavaScript>]
         new UINextPagelet (doc) :> Pagelet
 
     static member Empty =
-        Doc.Mk EmptyDoc (View.Const ())
+        DocProxy.Mk EmptyDoc (View.Const ())
 
   // Collections ----------------------------------------------------------------
 
@@ -470,26 +536,18 @@ and [<JavaScript>]
         |> Doc.EmbedView
 
     static member Convert render view =
-        View.Convert render view |> Doc.Flatten
+        View.Convert render view |> DocProxy.Flatten
 
     static member ConvertBy key render view =
-        View.ConvertBy key render view |> Doc.Flatten
+        View.ConvertBy key render view |> DocProxy.Flatten
 
     static member ConvertSeq render view =
-        View.ConvertSeq render view |> Doc.Flatten
+        View.ConvertSeq render view |> DocProxy.Flatten
 
     static member ConvertSeqBy key render view =
-        View.ConvertSeqBy key render view |> Doc.Flatten
+        View.ConvertSeqBy key render view |> DocProxy.Flatten
 
-// Form helpers ---------------------------------------------------------------
-
-/// Types of input box
-type InputControlType =
-    | InputBox
-    | PasswordBox
-    | TextArea
-
-type Doc with
+  // Form helpers ---------------------------------------------------------------
 
     static member InputInternal attr (var : Var<string>) inputTy =
         let (attrN, elemTy) =
@@ -501,16 +559,16 @@ type Doc with
             | TextArea -> (Attr.Concat attr, "textarea")
         let el = DU.CreateElement elemTy
         let valAttr = Attr.Value var
-        Doc.Elem el (Attr.Append attrN valAttr) Doc.Empty
+        DocProxy.Elem el (Attr.Append attrN valAttr) Doc.Empty
 
     static member Input attr (var: Var<string>) =
-        Doc.InputInternal attr (var : Var<string>) InputBox
+        DocProxy.InputInternal attr (var : Var<string>) InputBox
 
     static member PasswordBox attr (var: Var<string>) =
-        Doc.InputInternal attr (var : Var<string>) PasswordBox
+        DocProxy.InputInternal attr (var : Var<string>) PasswordBox
 
     static member InputArea attr (var: Var<string>) =
-        Doc.InputInternal attr (var : Var<string>) TextArea
+        DocProxy.InputInternal attr (var : Var<string>) TextArea
 
     static member Select attrs (show: 'T -> string) (options: list<'T>) (current: Var<'T>) =
         let getIndex (el: Element) =
@@ -537,7 +595,7 @@ type Doc with
                 let t = Doc.TextNode (show o)
                 Doc.Element "option" [Attr.Create "value" (string i)] [t])
             |> Doc.Concat
-        Doc.Elem el (Attr.Concat attrs |> Attr.Append selectedItemAttr) optionElements
+        DocProxy.Elem el (Attr.Concat attrs |> Attr.Append selectedItemAttr) optionElements
 
     static member CheckBox attrs (chk: Var<bool>) =
         let el = DU.CreateElement "input"
@@ -549,7 +607,7 @@ type Doc with
                 yield! attrs
                 yield Attr.DynamicProp "checked" chk.View
             ]
-        Doc.Elem el attrs Doc.Empty
+        DocProxy.Elem el attrs Doc.Empty
 
     static member CheckBoxGroup attrs (item: 'T) (chk: Var<list<'T>>) =
         // Create RView for the list of checked items
@@ -578,7 +636,7 @@ type Doc with
             updateList chkd
         el.AddEventListener("click", onClick, false)
 
-        Doc.Elem el attrs Doc.Empty
+        DocProxy.Elem el attrs Doc.Empty
 
     static member Clickable elem action =
         let el = DU.CreateElement elem
@@ -589,13 +647,13 @@ type Doc with
 
     static member Button caption attrs action =
         let attrs = Attr.Concat attrs
-        let el = Doc.Clickable "button" action
-        Doc.Elem el attrs (Doc.TextNode caption)
+        let el = DocProxy.Clickable "button" action
+        DocProxy.Elem el attrs (Doc.TextNode caption)
 
     static member Link caption attrs action =
         let attrs = Attr.Concat attrs |> Attr.Append (Attr.Create "href" "#")
-        let el = Doc.Clickable "a" action
-        Doc.Elem el attrs (Doc.TextNode caption)
+        let el = DocProxy.Clickable "a" action
+        DocProxy.Elem el attrs (Doc.TextNode caption)
 
     static member Radio attrs value var =
         // Radio buttons work by taking a common var, which is given a unique ID.
@@ -612,4 +670,10 @@ type Doc with
                 "name" ==> (Var.GetId var |> string)
                 valAttr
             ] @ (List.ofSeq attrs) |> Attr.Concat
-        Doc.Elem el attr Doc.Empty
+        DocProxy.Elem el attr Doc.Empty
+
+/// Types of input box
+and InputControlType =
+    | InputBox
+    | PasswordBox
+    | TextArea
