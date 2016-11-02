@@ -12,9 +12,9 @@ open WebSharper.UI.Next.Templating
 module Client =    
     open WebSharper.UI.Next.Client
 
-    let [<Literal>] TemplateHtmlPath = __SOURCE_DIRECTORY__ + "/template.html"
+    let [<Literal>] TemplateHtmlPath = __SOURCE_DIRECTORY__ + "/templates"
 
-    type MyTemplate = Template<TemplateHtmlPath> 
+    type MyTemplate = Template<TemplateHtmlPath>.template
 
     type Item =
         { id : Key; name: string; description: string }

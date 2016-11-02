@@ -41,6 +41,10 @@ open System.Runtime.Caching
 module internal Utils =
     let ( +/ ) a b = System.IO.Path.Combine(a, b)
 
+    let re = Regex(@"(\.ui\.next)?\.html?")
+    let typenameOfFilename fn =
+        re.Replace(fn, "")
+
     let isNull = function null -> true | _ -> false
         
     let inline ( |>! ) x f = f x; x
@@ -85,6 +89,12 @@ module internal Utils =
                 | a -> a
             )
 
+[<RequireQualifiedAccess>]
+type private SrcKind =
+    | PlainXml of string
+    | File of path: string
+    | Directory of dir: string
+
 [<AutoOpen>]
 module Cache =
     type MemoryCache with 
@@ -112,6 +122,23 @@ type TemplateProvider(cfg: TypeProviderConfig) as this =
     let templateTy = ctx.ProvidedTypeDefinition(thisAssembly, rootNamespace, "Template", None)
 
     let mutable watcher: FileSystemWatcher = null
+    let killWatcher() =
+        if not (isNull watcher) then
+            watcher.Dispose()
+            watcher <- null
+    let setWatcher dir file =
+        if cfg.IsInvalidationSupported then
+            if not (isNull watcher) then
+                watcher.Dispose()
+            watcher <-
+                new FileSystemWatcher(dir, file,
+                    NotifyFilter = (NotifyFilters.LastWrite ||| NotifyFilters.Security ||| NotifyFilters.FileName)
+                )
+            watcher.Changed.Add <| fun _ -> this.Invalidate()
+            watcher.Deleted.Add <| fun _ -> this.Invalidate()
+            watcher.Renamed.Add <| fun _ -> this.Invalidate()
+            watcher.Created.Add <| fun _ -> this.Invalidate()
+            watcher.EnableRaisingEvents <- true
 
     let textHoleRegex = Regex @"\$(!?)\{([^\}]+)\}" 
     let dataHole = xn"data-hole"
@@ -136,60 +163,15 @@ type TemplateProvider(cfg: TypeProviderConfig) as this =
             | a -> VarUnchecked a.Value
         | a -> Var a.Value
 
-    let cache = new MemoryCache("YamlConfigProvider")
-
     do
         this.Disposing.Add <| fun _ ->
-            if watcher <> null then watcher.Dispose()
-            cache.Dispose()
+            killWatcher()
 
         templateTy.DefineStaticParameters(
             [ctx.ProvidedStaticParameter("pathOrXml", typeof<string>)],
             fun typename pars ->
-                let value = lazy (
-                match pars with
-                | [| :? string as pathOrXml |] ->
-                    let ty = ctx.ProvidedTypeDefinition(thisAssembly, rootNamespace, typename, None)
 
-                    let parseXml s =
-                        try // Try to load the file as a whole XML document, ie. single root node with optional DTD.
-                            let xmlDoc = XDocument.Parse(s, LoadOptions.PreserveWhitespace)
-                            let xml = XElement(xn"wrapper")
-                            xml.Add(xmlDoc.Root)
-                            xml
-                        with :? System.Xml.XmlException as e ->
-                            // Try to load the file as a XML fragment, ie. potentially several root nodes.
-                            try XDocument.Parse("<wrapper>" + s + "</wrapper>", LoadOptions.PreserveWhitespace).Root
-                            with _ ->
-                                // The error from loading as a full document generally has a better error message.
-                                raise e
-
-                    let xml =
-                        if pathOrXml.Contains("<") then
-                            if watcher <> null then 
-                                watcher.Dispose()
-                                watcher <- null
-
-                            parseXml pathOrXml    
-                        else 
-                            let htmlFile = 
-                                if Path.IsPathRooted pathOrXml then pathOrXml 
-                                else cfg.ResolutionFolder +/ pathOrXml
-
-                            if cfg.IsInvalidationSupported then
-                                if watcher <> null then watcher.Dispose()
-                                watcher <-
-                                    new FileSystemWatcher(Path.GetDirectoryName htmlFile, Path.GetFileName htmlFile, 
-                                        NotifyFilter = (NotifyFilters.LastWrite ||| NotifyFilters.Security ||| NotifyFilters.FileName)
-                                    )
-                                watcher.Changed.Add <| fun _ -> this.Invalidate()
-                                watcher.Deleted.Add <| fun _ -> this.Invalidate()
-                                watcher.Renamed.Add <| fun _ -> this.Invalidate()
-                                watcher.Created.Add <| fun _ -> this.Invalidate()
-                                watcher.EnableRaisingEvents <- true
-
-                            parseXml (File.ReadAllText htmlFile) 
-                        
+                let mkOne (ty: ProvidedTypeDefinition) (xml: XElement) =
                     let innerTemplates =
                         xml.Descendants() |> Seq.choose (fun e -> 
                             match e.Attribute(dataTemplate) with
@@ -214,7 +196,7 @@ type TemplateProvider(cfg: TypeProviderConfig) as this =
                                     e
                             name, if wrap then XElement(xn"body", e) else e
                         )
-                                        
+
                     let addTemplateMethod (t: XElement) (toTy: ProvidedTypeDefinition) =
                         let holes = Dictionary()
 
@@ -478,9 +460,56 @@ type TemplateProvider(cfg: TypeProviderConfig) as this =
                     for name, e in innerTemplates do
                         ctx.ProvidedTypeDefinition(name, None) |>! addTemplateMethod e |> ty.AddMember
 
-                    ty |>! addTemplateMethod xml
+                    ty |> addTemplateMethod xml
+                match pars with
+                | [| :? string as pathOrXml |] ->
+                    let ty = ctx.ProvidedTypeDefinition(thisAssembly, rootNamespace, typename, None)
+
+                    let source =
+                        if pathOrXml.Contains("<") then
+                            killWatcher()
+                            SrcKind.PlainXml pathOrXml
+                        else
+                            let path =
+                                if Path.IsPathRooted pathOrXml then pathOrXml
+                                else cfg.ResolutionFolder +/ pathOrXml
+                            if File.Exists path then
+                                SrcKind.File path
+                            elif Directory.Exists path then
+                                SrcKind.Directory path
+                            else failwith "pathOrXml must be either an XML string or the path to a file or directory"
+
+                    let parseXml s =
+                        try // Try to load the file as a whole XML document, ie. single root node with optional DTD.
+                            let xmlDoc = XDocument.Parse(s, LoadOptions.PreserveWhitespace)
+                            let xml = XElement(xn"wrapper")
+                            xml.Add(xmlDoc.Root)
+                            xml
+                        with :? System.Xml.XmlException as e ->
+                            // Try to load the file as a XML fragment, ie. potentially several root nodes.
+                            try XDocument.Parse("<wrapper>" + s + "</wrapper>", LoadOptions.PreserveWhitespace).Root
+                            with _ ->
+                                // The error from loading as a full document generally has a better error message.
+                                raise e
+
+                    match source with
+                    | SrcKind.PlainXml src ->
+                        killWatcher()
+                        mkOne ty (parseXml pathOrXml)
+                    | SrcKind.File path ->
+                        setWatcher (Path.GetDirectoryName path) (Path.GetFileName path)
+                        mkOne ty (parseXml (File.ReadAllText path))
+                    | SrcKind.Directory dir ->
+                        setWatcher dir "*.*"
+                        Directory.GetFiles(dir, "*.*")
+                        |> Array.iter (fun p ->
+                            let typename = Path.GetFileName p |> typenameOfFilename
+                            let ty' = ctx.ProvidedTypeDefinition(typename, None)
+                            mkOne ty' (parseXml (File.ReadAllText p))
+                            ty.AddMember ty'
+                        )
+                    ty
                 | _ -> failwith "Unexpected parameter values")
-                cache.GetOrAdd (typename, value))
         this.AddNamespace(rootNamespace, [ templateTy ])
 
     override this.ResolveAssembly(args) =

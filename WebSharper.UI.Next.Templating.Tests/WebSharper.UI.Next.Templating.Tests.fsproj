@@ -38,7 +38,7 @@
     <Compile Include="Client.fs" />
     <Content Include="index.html" />
     <Content Include="Web.config" />
-    <Content Include="template.html" />
+    <Content Include="templates/template.html" />
   </ItemGroup>
   <ProjectExtensions>
     <VisualStudio>
@@ -48,7 +48,7 @@
           <AutoAssignPort>True</AutoAssignPort>
           <DevelopmentServerPort>0</DevelopmentServerPort>
           <DevelopmentServerVPath>/</DevelopmentServerVPath>
-          <IISUrl>http://localhost:59277/</IISUrl>
+          <IISUrl>http://localhost:59278/</IISUrl>
           <NTLMAuthentication>False</NTLMAuthentication>
           <UseCustomServer>False</UseCustomServer>
           <CustomServerUrl>
