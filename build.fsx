@@ -10,6 +10,6 @@ Target "Build" DoNothing
 targets.BuildDebug ==> "Build"
 
 Target "CI-Release" DoNothing
-targets.Publish ==> "CI-Release"
+targets.CommitPublish ==> "CI-Release"
 
 RunTargetOrDefault "Build"
